@@ -2,12 +2,13 @@ package progress
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
 )
 
-// Bar tracks check counts and renders a live progress line to stdout.
+// Bar tracks check counts and renders a live progress line to stderr.
 type Bar struct {
 	total        int64
 	valid        atomic.Int64
@@ -61,9 +62,9 @@ func (b *Bar) Start() func() {
 				proc := b.processed.Load()
 				speed := (proc - lastProc) * 5 // 200ms ticks × 5 = 1 second
 				lastProc = proc
-				fmt.Print(b.render(speed))
+				fmt.Fprint(os.Stderr, b.render(speed))
 			case <-done:
-				fmt.Println(b.render(0))
+				fmt.Fprintln(os.Stderr, b.render(0))
 				return
 			}
 		}
