@@ -23,9 +23,15 @@ import (
 )
 
 const (
-	dialTimeout  = 30 * time.Second
-	retryWait    = time.Second
-	maxAttempts  = 2
+	// dialTimeout bounds each dial AND, via SetDeadline, the subsequent
+	// TLS handshake + IMAP LOGIN. 10 s rescues fast servers without
+	// parking workers on dead proxies; healthy IMAP responds in < 1 s.
+	dialTimeout = 10 * time.Second
+	// tcpNet is "tcp4" so all callouts land on the IPv4 egress — required
+	// by IP-allowlisted proxy providers, and avoids unpredictable v6 paths.
+	tcpNet        = "tcp4"
+	retryWait     = time.Second
+	maxAttempts   = 2
 	connectMaxHdr = 4096
 )
 
@@ -199,10 +205,10 @@ func (c *Checker) dial(addr string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: dialTimeout}
 
 	if proxyAddr == "" {
-		return dialer.Dial("tcp", addr)
+		return dialer.Dial(tcpNet, addr)
 	}
 
-	conn, err := dialer.Dial("tcp", proxyAddr)
+	conn, err := dialer.Dial(tcpNet, proxyAddr)
 	if err != nil {
 		return nil, fmt.Errorf("proxy dial: %w", err)
 	}
