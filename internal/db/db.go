@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"strings"
 
 	"github.com/cespare/xxhash/v2"
@@ -49,7 +50,7 @@ func BatchLookup(dbPath string, domains []string) (map[string]ServerInfo, error)
 		var server string
 		var port int
 		err := stmt.QueryRow(domainKey(domain)).Scan(&server, &port)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			result[domain] = ServerInfo{Host: "imap." + domain, Port: 993, Fallback: true}
 			continue
 		}

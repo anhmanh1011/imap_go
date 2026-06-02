@@ -97,7 +97,9 @@ func main() {
 
 	stopFlush()
 	stopBar()
-	writer.Close() //nolint:errcheck
+	if err := writer.Close(); err != nil {
+		log.Printf("warning: output writer reported errors (results may be incomplete): %v", err)
+	}
 
 	fmt.Printf("\nResults saved to %s/\n", *outFlag)
 }

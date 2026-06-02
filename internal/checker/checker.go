@@ -21,9 +21,15 @@ import (
 )
 
 const (
-	dialTimeout = 30 * time.Second
-	retryWait   = time.Second
+	dialTimeout  = 30 * time.Second
+	retryWait    = time.Second
+	maxAttempts  = 2
+	connectMaxHdr = 4096
 )
+
+// tlsCfg is shared across all IMAP connections — stateless, safe to reuse.
+// Hoisted out of doLogin to avoid one allocation per credential.
+var tlsCfg = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
 
 // Credential is a parsed login entry from the input file.
 type Credential struct {
@@ -131,7 +137,7 @@ func (c *Checker) Check(cred Credential) {
 func (c *Checker) tryLogin(cred Credential, info db.ServerInfo) (result.Status, string) {
 	addr := fmt.Sprintf("%s:%d", info.Host, info.Port)
 	var lastReason string
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			time.Sleep(retryWait)
 		}
@@ -147,28 +153,27 @@ func (c *Checker) tryLogin(cred Credential, info db.ServerInfo) (result.Status, 
 func (c *Checker) doLogin(cred Credential, addr string, port int) (status result.Status, reason string, isNetErr bool) {
 	rawConn, err := c.dial(addr)
 	if err != nil {
-		return result.Error, err.Error(), true
+		return result.Error, "dial: " + err.Error(), true
 	}
 	_ = rawConn.SetDeadline(time.Now().Add(dialTimeout))
-
-	tlsCfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec
 
 	var client *imapclient.Client
 	if port == 143 {
 		// Plain connect → read greeting → STARTTLS upgrade
 		// imapclient.NewStartTLS handles both the greeting read and the STARTTLS handshake.
+		// Defensive: even though the library closes rawConn on failure, a redundant
+		// Close is idempotent and protects against future behavior changes.
 		client, err = imapclient.NewStartTLS(rawConn, &imapclient.Options{TLSConfig: tlsCfg})
 		if err != nil {
-			// rawConn already closed by NewStartTLS on failure.
-			// Treat STARTTLS protocol errors as network errors so we retry (server may be flaky).
-			return result.Error, err.Error(), true
+			_ = rawConn.Close()
+			return result.Error, "starttls: " + err.Error(), true
 		}
 	} else {
 		// Implicit TLS (port 993 and any other port from DB)
 		tlsConn := tls.Client(rawConn, tlsCfg)
 		if err := tlsConn.Handshake(); err != nil {
-			rawConn.Close()
-			return result.Error, err.Error(), true
+			_ = rawConn.Close()
+			return result.Error, "tls: " + err.Error(), true
 		}
 		client = imapclient.New(tlsConn, nil)
 	}
@@ -179,7 +184,7 @@ func (c *Checker) doLogin(cred Credential, addr string, port int) (status result
 		if errors.As(err, &imapErr) {
 			return result.Invalid, "", false // IMAP NO/BAD = wrong password, don't retry
 		}
-		return result.Error, err.Error(), true
+		return result.Error, "login: " + err.Error(), true
 	}
 	return result.Valid, "", false
 }
@@ -197,6 +202,12 @@ func (c *Checker) dial(addr string) (net.Conn, error) {
 	conn, err := dialer.Dial("tcp", proxyAddr)
 	if err != nil {
 		return nil, fmt.Errorf("proxy dial: %w", err)
+	}
+	// Bound the entire CONNECT handshake so a slow/silent proxy can't park
+	// a worker forever. Cleared on success by the caller via SetDeadline.
+	if err := conn.SetDeadline(time.Now().Add(dialTimeout)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("proxy SetDeadline: %w", err)
 	}
 
 	// Send HTTP CONNECT request
@@ -217,20 +228,30 @@ func (c *Checker) dial(addr string) (net.Conn, error) {
 		if bytes.HasSuffix(hdr.Bytes(), []byte("\r\n\r\n")) {
 			break
 		}
-		if hdr.Len() > 4096 {
+		if hdr.Len() > connectMaxHdr {
 			conn.Close()
 			return nil, fmt.Errorf("proxy CONNECT response too large")
 		}
 	}
 
-	// Check status line contains "200"
+	// Check status line: HTTP/1.x SP 200 SP ...
 	statusLine := hdr.Bytes()
 	if idx := bytes.Index(statusLine, []byte("\r\n")); idx >= 0 {
 		statusLine = statusLine[:idx]
 	}
-	if !bytes.Contains(statusLine, []byte("200")) {
+	if !statusLineIs2xx(statusLine) {
 		conn.Close()
 		return nil, fmt.Errorf("proxy CONNECT failed: %s", string(statusLine))
 	}
 	return conn, nil
+}
+
+// statusLineIs2xx returns true if line's space-delimited second field is in [200,300).
+// Stricter than bytes.Contains("200") — rejects "HTTP/1.1 500 ... 200 ..." reasons.
+func statusLineIs2xx(line []byte) bool {
+	parts := bytes.SplitN(line, []byte(" "), 3)
+	if len(parts) < 2 || len(parts[1]) != 3 {
+		return false
+	}
+	return parts[1][0] == '2'
 }

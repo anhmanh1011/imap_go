@@ -49,10 +49,12 @@ func (b *Bar) render(speed int64) string {
 }
 
 // Start renders the progress bar every 200ms until the returned stop function is called.
-// The stop function prints the final state and waits for the goroutine to exit.
+// The stop function prints the final state and blocks until the renderer goroutine exits.
 func (b *Bar) Start() func() {
 	done := make(chan struct{})
+	exited := make(chan struct{})
 	go func() {
+		defer close(exited)
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 		var lastProc int64
@@ -69,5 +71,8 @@ func (b *Bar) Start() func() {
 			}
 		}
 	}()
-	return func() { close(done) }
+	return func() {
+		close(done)
+		<-exited
+	}
 }
