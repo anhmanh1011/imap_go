@@ -1,0 +1,11 @@
+# Build artifacts
+imap_checker
+imap_checker.exe
+
+# Local data
+Servers.db
+*.db-shm
+*.db-wal
+
+# Output
+output/
