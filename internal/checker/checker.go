@@ -6,8 +6,10 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -189,7 +191,9 @@ func (c *Checker) doLogin(cred Credential, addr string, port int) (status result
 	return result.Valid, "", false
 }
 
-// dial establishes a TCP connection to addr, optionally tunneled through an HTTP CONNECT proxy.
+// dial establishes a TCP connection to addr. When the pool is non-empty it
+// tunnels through the next proxy using either HTTP CONNECT or SOCKS5
+// depending on pool.Kind(). On empty pool, dials directly.
 func (c *Checker) dial(addr string) (net.Conn, error) {
 	proxyAddr := c.proxyPool.Next()
 	dialer := &net.Dialer{Timeout: dialTimeout}
@@ -198,52 +202,63 @@ func (c *Checker) dial(addr string) (net.Conn, error) {
 		return dialer.Dial("tcp", addr)
 	}
 
-	// Connect to proxy
 	conn, err := dialer.Dial("tcp", proxyAddr)
 	if err != nil {
 		return nil, fmt.Errorf("proxy dial: %w", err)
 	}
-	// Bound the entire CONNECT handshake so a slow/silent proxy can't park
-	// a worker forever. Cleared on success by the caller via SetDeadline.
+	// Bound the entire handshake so a slow/silent proxy can't park a worker
+	// forever. Cleared on success by the caller via SetDeadline.
 	if err := conn.SetDeadline(time.Now().Add(dialTimeout)); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("proxy SetDeadline: %w", err)
 	}
 
-	// Send HTTP CONNECT request
+	switch c.proxyPool.Kind() {
+	case proxy.KindSOCKS5:
+		if err := socks5Handshake(conn, addr); err != nil {
+			conn.Close()
+			return nil, err
+		}
+	default: // KindHTTPConnect
+		if err := httpConnectHandshake(conn, addr); err != nil {
+			conn.Close()
+			return nil, err
+		}
+	}
+	return conn, nil
+}
+
+// httpConnectHandshake performs an HTTP/1.0 CONNECT tunnel handshake on conn.
+// On success conn is ready to carry the tunneled bytes (TLS, then IMAP).
+func httpConnectHandshake(conn net.Conn, addr string) error {
 	if _, err := fmt.Fprintf(conn, "CONNECT %s HTTP/1.0\r\nHost: %s\r\n\r\n", addr, addr); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("proxy CONNECT write: %w", err)
+		return fmt.Errorf("proxy CONNECT write: %w", err)
 	}
 
-	// Read proxy response byte-by-byte to avoid over-buffering into the IMAP stream
+	// Read response byte-by-byte to avoid over-buffering into the IMAP stream.
 	var hdr bytes.Buffer
 	b := make([]byte, 1)
 	for {
 		if _, err := conn.Read(b); err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("proxy CONNECT read: %w", err)
+			return fmt.Errorf("proxy CONNECT read: %w", err)
 		}
 		hdr.Write(b)
 		if bytes.HasSuffix(hdr.Bytes(), []byte("\r\n\r\n")) {
 			break
 		}
 		if hdr.Len() > connectMaxHdr {
-			conn.Close()
-			return nil, fmt.Errorf("proxy CONNECT response too large")
+			return fmt.Errorf("proxy CONNECT response too large")
 		}
 	}
 
-	// Check status line: HTTP/1.x SP 200 SP ...
 	statusLine := hdr.Bytes()
 	if idx := bytes.Index(statusLine, []byte("\r\n")); idx >= 0 {
 		statusLine = statusLine[:idx]
 	}
 	if !statusLineIs2xx(statusLine) {
-		conn.Close()
-		return nil, fmt.Errorf("proxy CONNECT failed: %s", string(statusLine))
+		return fmt.Errorf("proxy CONNECT failed: %s", string(statusLine))
 	}
-	return conn, nil
+	return nil
 }
 
 // statusLineIs2xx returns true if line's space-delimited second field is in [200,300).
@@ -254,4 +269,100 @@ func statusLineIs2xx(line []byte) bool {
 		return false
 	}
 	return parts[1][0] == '2'
+}
+
+// socks5Handshake performs an RFC 1928 SOCKS5 negotiation on conn with no
+// authentication, then issues a CONNECT to addr ("host:port"). On success
+// conn is positioned for the upstream protocol stream.
+func socks5Handshake(conn net.Conn, addr string) error {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("socks5 split host:port: %w", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 0 || port > 0xFFFF {
+		return fmt.Errorf("socks5 bad port %q", portStr)
+	}
+	if len(host) > 255 {
+		return fmt.Errorf("socks5 host too long (%d)", len(host))
+	}
+
+	// Greeting: VER=5, NMETHODS=1, METHOD=0 (no auth).
+	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+		return fmt.Errorf("socks5 greet write: %w", err)
+	}
+	greetResp := make([]byte, 2)
+	if _, err := io.ReadFull(conn, greetResp); err != nil {
+		return fmt.Errorf("socks5 greet read: %w", err)
+	}
+	if greetResp[0] != 0x05 {
+		return fmt.Errorf("socks5 bad version %#x", greetResp[0])
+	}
+	if greetResp[1] != 0x00 {
+		return fmt.Errorf("socks5 unsupported auth method %#x", greetResp[1])
+	}
+
+	// CONNECT: VER=5, CMD=1 (connect), RSV=0, ATYP=3 (domain), len, host, port BE.
+	req := make([]byte, 0, 7+len(host))
+	req = append(req, 0x05, 0x01, 0x00, 0x03, byte(len(host)))
+	req = append(req, host...)
+	req = append(req, byte(port>>8), byte(port&0xFF))
+	if _, err := conn.Write(req); err != nil {
+		return fmt.Errorf("socks5 connect write: %w", err)
+	}
+
+	// Reply: VER, REP, RSV, ATYP, BND.ADDR, BND.PORT.
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(conn, head); err != nil {
+		return fmt.Errorf("socks5 reply head: %w", err)
+	}
+	if head[0] != 0x05 {
+		return fmt.Errorf("socks5 reply bad version %#x", head[0])
+	}
+	if head[1] != 0x00 {
+		return fmt.Errorf("socks5 reply status %s", socks5StatusName(head[1]))
+	}
+	// Drain BND.ADDR + BND.PORT so the conn is positioned at the upstream payload.
+	var addrLen int
+	switch head[3] {
+	case 0x01: // IPv4
+		addrLen = 4
+	case 0x03: // domain
+		l := make([]byte, 1)
+		if _, err := io.ReadFull(conn, l); err != nil {
+			return fmt.Errorf("socks5 reply addr len: %w", err)
+		}
+		addrLen = int(l[0])
+	case 0x04: // IPv6
+		addrLen = 16
+	default:
+		return fmt.Errorf("socks5 reply unknown atyp %#x", head[3])
+	}
+	if _, err := io.CopyN(io.Discard, conn, int64(addrLen+2)); err != nil {
+		return fmt.Errorf("socks5 reply addr+port: %w", err)
+	}
+	return nil
+}
+
+func socks5StatusName(b byte) string {
+	switch b {
+	case 0x01:
+		return "general failure"
+	case 0x02:
+		return "not allowed by ruleset"
+	case 0x03:
+		return "network unreachable"
+	case 0x04:
+		return "host unreachable"
+	case 0x05:
+		return "connection refused"
+	case 0x06:
+		return "TTL expired"
+	case 0x07:
+		return "command not supported"
+	case 0x08:
+		return "address type not supported"
+	default:
+		return fmt.Sprintf("status %#x", b)
+	}
 }
