@@ -142,26 +142,42 @@ func (c *Checker) Check(cred Credential) {
 	}
 }
 
+// failKind classifies why a doLogin attempt failed, driving tryLogin's
+// retry policy.
+type failKind int
+
+const (
+	failNone  failKind = iota // success or non-retryable protocol error (IMAP NO/BAD)
+	failProxy                 // proxy-side fail — retry immediately, pick next proxy
+	failNet                   // server-side network fail — retry after retryWait
+)
+
 func (c *Checker) tryLogin(cred Credential, info db.ServerInfo) (result.Status, string) {
 	addr := fmt.Sprintf("%s:%d", info.Host, info.Port)
 	var lastReason string
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if attempt > 0 {
-			time.Sleep(retryWait)
-		}
-		status, reason, isNetErr := c.doLogin(cred, addr, info.Port)
-		if !isNetErr {
+		status, reason, kind := c.doLogin(cred, addr, info.Port)
+		if kind == failNone {
 			return status, reason
 		}
 		lastReason = reason
+		// failProxy retries immediately (round-robin moves to a new proxy);
+		// failNet waits because the same upstream is likely still flaky.
+		if attempt+1 < maxAttempts && kind == failNet {
+			time.Sleep(retryWait)
+		}
 	}
 	return result.Error, lastReason
 }
 
-func (c *Checker) doLogin(cred Credential, addr string, port int) (status result.Status, reason string, isNetErr bool) {
-	rawConn, err := c.dial(addr)
+func (c *Checker) doLogin(cred Credential, addr string, port int) (status result.Status, reason string, kind failKind) {
+	rawConn, proxyUsed, err := c.dial(addr)
 	if err != nil {
-		return result.Error, "dial: " + err.Error(), true
+		if proxyUsed != "" {
+			c.proxyPool.MarkFailed(proxyUsed)
+			return result.Error, "dial: " + err.Error(), failProxy
+		}
+		return result.Error, "dial: " + err.Error(), failNet
 	}
 	_ = rawConn.SetDeadline(time.Now().Add(dialTimeout))
 
@@ -174,14 +190,14 @@ func (c *Checker) doLogin(cred Credential, addr string, port int) (status result
 		client, err = imapclient.NewStartTLS(rawConn, &imapclient.Options{TLSConfig: tlsCfg})
 		if err != nil {
 			_ = rawConn.Close()
-			return result.Error, "starttls: " + err.Error(), true
+			return result.Error, "starttls: " + err.Error(), failNet
 		}
 	} else {
 		// Implicit TLS (port 993 and any other port from DB)
 		tlsConn := tls.Client(rawConn, tlsCfg)
 		if err := tlsConn.Handshake(); err != nil {
 			_ = rawConn.Close()
-			return result.Error, "tls: " + err.Error(), true
+			return result.Error, "tls: " + err.Error(), failNet
 		}
 		client = imapclient.New(tlsConn, nil)
 	}
@@ -190,48 +206,51 @@ func (c *Checker) doLogin(cred Credential, addr string, port int) (status result
 	if err := client.Login(cred.User, cred.Pass).Wait(); err != nil {
 		var imapErr *imap.Error
 		if errors.As(err, &imapErr) {
-			return result.Invalid, "", false // IMAP NO/BAD = wrong password, don't retry
+			return result.Invalid, "", failNone // IMAP NO/BAD = wrong password, don't retry
 		}
-		return result.Error, "login: " + err.Error(), true
+		return result.Error, "login: " + err.Error(), failNet
 	}
-	return result.Valid, "", false
+	return result.Valid, "", failNone
 }
 
 // dial establishes a TCP connection to addr. When the pool is non-empty it
 // tunnels through the next proxy using either HTTP CONNECT or SOCKS5
 // depending on pool.Kind(). On empty pool, dials directly.
-func (c *Checker) dial(addr string) (net.Conn, error) {
+// Returns the proxy address actually used (empty string for direct dial)
+// so the caller can MarkFailed it on subsequent error.
+func (c *Checker) dial(addr string) (net.Conn, string, error) {
 	proxyAddr := c.proxyPool.Next()
 	dialer := &net.Dialer{Timeout: dialTimeout}
 
 	if proxyAddr == "" {
-		return dialer.Dial(tcpNet, addr)
+		conn, err := dialer.Dial(tcpNet, addr)
+		return conn, "", err
 	}
 
 	conn, err := dialer.Dial(tcpNet, proxyAddr)
 	if err != nil {
-		return nil, fmt.Errorf("proxy dial: %w", err)
+		return nil, proxyAddr, fmt.Errorf("proxy dial: %w", err)
 	}
 	// Bound the entire handshake so a slow/silent proxy can't park a worker
 	// forever. Cleared on success by the caller via SetDeadline.
 	if err := conn.SetDeadline(time.Now().Add(dialTimeout)); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("proxy SetDeadline: %w", err)
+		return nil, proxyAddr, fmt.Errorf("proxy SetDeadline: %w", err)
 	}
 
 	switch c.proxyPool.Kind() {
 	case proxy.KindSOCKS5:
 		if err := socks5Handshake(conn, addr); err != nil {
 			conn.Close()
-			return nil, err
+			return nil, proxyAddr, err
 		}
 	default: // KindHTTPConnect
 		if err := httpConnectHandshake(conn, addr); err != nil {
 			conn.Close()
-			return nil, err
+			return nil, proxyAddr, err
 		}
 	}
-	return conn, nil
+	return conn, proxyAddr, nil
 }
 
 // httpConnectHandshake performs an HTTP/1.0 CONNECT tunnel handshake on conn.

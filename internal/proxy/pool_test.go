@@ -84,6 +84,113 @@ func TestPool_ConcurrentNext(t *testing.T) {
 	wg.Wait()
 }
 
+func TestPool_MarkFailed_Eviction(t *testing.T) {
+	p := New(KindSOCKS5)
+	p.SetProxies([]string{"a:1", "b:2", "c:3"})
+
+	// 2 fails on "a:1" — still below threshold (3)
+	p.MarkFailed("a:1")
+	p.MarkFailed("a:1")
+	if p.Evicted() != 0 {
+		t.Errorf("after 2 fails, Evicted=%d, want 0", p.Evicted())
+	}
+
+	// 3rd fail crosses the threshold
+	p.MarkFailed("a:1")
+	if p.Evicted() != 1 {
+		t.Errorf("after 3 fails, Evicted=%d, want 1", p.Evicted())
+	}
+}
+
+func TestPool_Next_SkipsEvicted(t *testing.T) {
+	p := New(KindSOCKS5)
+	p.SetProxies([]string{"dead:1", "alive:2"})
+
+	// Evict "dead:1"
+	for i := 0; i < int(evictThreshold); i++ {
+		p.MarkFailed("dead:1")
+	}
+
+	// Next should consistently return "alive:2" (the only non-evicted entry)
+	for i := 0; i < 20; i++ {
+		if got := p.Next(); got != "alive:2" {
+			t.Errorf("call %d: Next()=%q, want alive:2", i, got)
+		}
+	}
+}
+
+func TestPool_Next_AllEvicted_GivesUp(t *testing.T) {
+	p := New(KindSOCKS5)
+	p.SetProxies([]string{"a:1", "b:2", "c:3"})
+	for _, addr := range []string{"a:1", "b:2", "c:3"} {
+		for i := 0; i < int(evictThreshold); i++ {
+			p.MarkFailed(addr)
+		}
+	}
+	// All evicted — Next still returns SOMETHING from the list, not ""
+	got := p.Next()
+	if got != "a:1" && got != "b:2" && got != "c:3" {
+		t.Errorf("all-evicted Next()=%q, want a/b/c", got)
+	}
+}
+
+func TestPool_SetProxies_ResetsEviction(t *testing.T) {
+	p := New(KindSOCKS5)
+	p.SetProxies([]string{"x:1"})
+	for i := 0; i < int(evictThreshold); i++ {
+		p.MarkFailed("x:1")
+	}
+	if p.Evicted() != 1 {
+		t.Fatalf("pre-reset Evicted=%d, want 1", p.Evicted())
+	}
+	// New list arrives — eviction state should be wiped.
+	p.SetProxies([]string{"x:1", "y:2"})
+	if p.Evicted() != 0 {
+		t.Errorf("post-refresh Evicted=%d, want 0", p.Evicted())
+	}
+	// And Next should pick x:1 normally now.
+	first := p.Next()
+	if first != "x:1" && first != "y:2" {
+		t.Errorf("post-refresh Next()=%q, want x or y", first)
+	}
+}
+
+func TestPool_MarkFailed_Empty_NoOp(t *testing.T) {
+	p := New(KindSOCKS5)
+	p.MarkFailed("") // must not panic or insert empty key
+	if p.Evicted() != 0 {
+		t.Errorf("Evicted=%d, want 0", p.Evicted())
+	}
+}
+
+func TestPool_ConcurrentMarkFailedAndNext(t *testing.T) {
+	p := New(KindSOCKS5)
+	const n = 100
+	list := make([]string, n)
+	for i := range list {
+		list[i] = "p" + string(rune('A'+i%26)) + ":" + string(rune('0'+i%10))
+	}
+	p.SetProxies(list)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 500; j++ {
+				p.Next()
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 500; j++ {
+				p.MarkFailed(list[j%n])
+			}
+		}()
+	}
+	wg.Wait()
+}
+
 func TestLoadFile_Entries(t *testing.T) {
 	f, err := os.CreateTemp("", "proxies*.txt")
 	if err != nil {
