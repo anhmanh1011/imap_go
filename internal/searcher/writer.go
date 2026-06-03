@@ -31,6 +31,9 @@ func NewWriter(outDir string) (*Writer, error) {
 	for i, name := range fileNames {
 		f, err := os.Create(filepath.Join(outDir, name))
 		if err != nil {
+			for j := 0; j < i; j++ {
+				w.files[j].Close()
+			}
 			return nil, err
 		}
 		w.files[i] = f
@@ -61,11 +64,11 @@ func (w *Writer) WriteError(user, pass, reason string) {
 }
 
 func sanitize(s string) string {
-	s = strings.ReplaceAll(s, "\r", "")
-	s = strings.ReplaceAll(s, "\n", "")
 	if len(s) > 200 {
 		s = s[:200]
 	}
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
 	return s
 }
 
