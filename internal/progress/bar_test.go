@@ -48,4 +48,27 @@ func TestBar_Render_Format(t *testing.T) {
 	if !strings.Contains(s, "500 acc/s") {
 		t.Errorf("render missing speed: %q", s)
 	}
+	if !strings.Contains(s, "CPM 30000") {
+		t.Errorf("render missing instant CPM (500 acc/s × 60): %q", s)
+	}
+	if !strings.Contains(s, "ETA --") {
+		t.Errorf("render should show ETA -- before Start() seeds start time: %q", s)
+	}
+}
+
+func TestFormatETA(t *testing.T) {
+	cases := map[float64]string{
+		0.4:    "<1m",
+		1:      "1m",
+		59:     "59m",
+		60:     "1h00m",
+		125:    "2h05m",
+		1440:   "1d00h00m",
+		1500.5: "1d01h00m",
+	}
+	for in, want := range cases {
+		if got := formatETA(in); got != want {
+			t.Errorf("formatETA(%v) = %q, want %q", in, got, want)
+		}
+	}
 }

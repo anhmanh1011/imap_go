@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -210,53 +211,87 @@ func (c *Checker) doLogin(cred Credential, addr string, port int) (status result
 		}
 		return result.Error, "login: " + err.Error(), failNet
 	}
+	// Verify actual mailbox access — some servers (e.g. Interia Group) return LOGIN OK
+	// for all credentials as an anti-scraping countermeasure. SELECT INBOX confirms the
+	// session is genuinely authenticated and the mailbox exists.
+	if _, err := client.Select("INBOX", nil).Wait(); err != nil {
+		var imapErr *imap.Error
+		if errors.As(err, &imapErr) {
+			return result.Invalid, "", failNone // server lied about LOGIN OK
+		}
+		return result.Error, "select: " + err.Error(), failNet
+	}
 	return result.Valid, "", failNone
 }
 
 // dial establishes a TCP connection to addr. When the pool is non-empty it
 // tunnels through the next proxy using either HTTP CONNECT or SOCKS5
 // depending on pool.Kind(). On empty pool, dials directly.
-// Returns the proxy address actually used (empty string for direct dial)
+// Returns the proxy entry actually used (empty string for direct dial)
 // so the caller can MarkFailed it on subsequent error.
 func (c *Checker) dial(addr string) (net.Conn, string, error) {
-	proxyAddr := c.proxyPool.Next()
+	proxyEntry := c.proxyPool.Next()
 	dialer := &net.Dialer{Timeout: dialTimeout}
 
-	if proxyAddr == "" {
+	if proxyEntry == "" {
 		conn, err := dialer.Dial(tcpNet, addr)
 		return conn, "", err
 	}
 
+	proxyAddr, pUser, pPass := parseProxyEntry(proxyEntry)
 	conn, err := dialer.Dial(tcpNet, proxyAddr)
 	if err != nil {
-		return nil, proxyAddr, fmt.Errorf("proxy dial: %w", err)
+		return nil, proxyEntry, fmt.Errorf("proxy dial: %w", err)
 	}
 	// Bound the entire handshake so a slow/silent proxy can't park a worker
 	// forever. Cleared on success by the caller via SetDeadline.
 	if err := conn.SetDeadline(time.Now().Add(dialTimeout)); err != nil {
 		conn.Close()
-		return nil, proxyAddr, fmt.Errorf("proxy SetDeadline: %w", err)
+		return nil, proxyEntry, fmt.Errorf("proxy SetDeadline: %w", err)
 	}
 
 	switch c.proxyPool.Kind() {
 	case proxy.KindSOCKS5:
-		if err := socks5Handshake(conn, addr); err != nil {
+		if err := socks5Handshake(conn, addr, pUser, pPass); err != nil {
 			conn.Close()
-			return nil, proxyAddr, err
+			return nil, proxyEntry, err
 		}
 	default: // KindHTTPConnect
-		if err := httpConnectHandshake(conn, addr); err != nil {
+		if err := httpConnectHandshake(conn, addr, pUser, pPass); err != nil {
 			conn.Close()
-			return nil, proxyAddr, err
+			return nil, proxyEntry, err
 		}
 	}
-	return conn, proxyAddr, nil
+	return conn, proxyEntry, nil
+}
+
+// parseProxyEntry splits a pool entry into (addr, user, pass).
+// Supported forms:
+//
+//	"host:port"               -> addr="host:port", user="", pass=""
+//	"host:port:user:pass"     -> auth split on the FIRST 4 ":" only, so passwords
+//	                             may contain ":" (the password is the remainder).
+//
+// Any other shape is returned as addr=entry with empty creds — the subsequent
+// dial will fail loudly rather than silently mis-auth.
+func parseProxyEntry(entry string) (addr, user, pass string) {
+	parts := strings.SplitN(entry, ":", 4)
+	if len(parts) == 4 {
+		return parts[0] + ":" + parts[1], parts[2], parts[3]
+	}
+	return entry, "", ""
 }
 
 // httpConnectHandshake performs an HTTP/1.0 CONNECT tunnel handshake on conn.
+// When user/pass are non-empty, a Proxy-Authorization: Basic header is sent.
 // On success conn is ready to carry the tunneled bytes (TLS, then IMAP).
-func httpConnectHandshake(conn net.Conn, addr string) error {
-	if _, err := fmt.Fprintf(conn, "CONNECT %s HTTP/1.0\r\nHost: %s\r\n\r\n", addr, addr); err != nil {
+func httpConnectHandshake(conn net.Conn, addr, user, pass string) error {
+	var authHdr string
+	if user != "" || pass != "" {
+		creds := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+		authHdr = "Proxy-Authorization: Basic " + creds + "\r\n"
+	}
+	if _, err := fmt.Fprintf(conn, "CONNECT %s HTTP/1.0\r\nHost: %s\r\n%s\r\n", addr, addr, authHdr); err != nil {
 		return fmt.Errorf("proxy CONNECT write: %w", err)
 	}
 
@@ -296,10 +331,11 @@ func statusLineIs2xx(line []byte) bool {
 	return parts[1][0] == '2'
 }
 
-// socks5Handshake performs an RFC 1928 SOCKS5 negotiation on conn with no
-// authentication, then issues a CONNECT to addr ("host:port"). On success
-// conn is positioned for the upstream protocol stream.
-func socks5Handshake(conn net.Conn, addr string) error {
+// socks5Handshake performs an RFC 1928 SOCKS5 negotiation on conn, then
+// issues a CONNECT to addr ("host:port"). When user/pass are non-empty the
+// greeting offers both no-auth and RFC 1929 user/pass; the server picks one
+// and we comply. On success conn is positioned for the upstream protocol stream.
+func socks5Handshake(conn net.Conn, addr, user, pass string) error {
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fmt.Errorf("socks5 split host:port: %w", err)
@@ -312,8 +348,14 @@ func socks5Handshake(conn net.Conn, addr string) error {
 		return fmt.Errorf("socks5 host too long (%d)", len(host))
 	}
 
-	// Greeting: VER=5, NMETHODS=1, METHOD=0 (no auth).
-	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+	// Greeting: VER=5, NMETHODS, METHODS...
+	// Offer user/pass first so an auth-required server doesn't reject us when
+	// we have creds. Servers that accept no-auth will still pick 0x00.
+	greet := []byte{0x05, 0x01, 0x00}
+	if user != "" || pass != "" {
+		greet = []byte{0x05, 0x02, 0x02, 0x00}
+	}
+	if _, err := conn.Write(greet); err != nil {
 		return fmt.Errorf("socks5 greet write: %w", err)
 	}
 	greetResp := make([]byte, 2)
@@ -323,7 +365,36 @@ func socks5Handshake(conn net.Conn, addr string) error {
 	if greetResp[0] != 0x05 {
 		return fmt.Errorf("socks5 bad version %#x", greetResp[0])
 	}
-	if greetResp[1] != 0x00 {
+	switch greetResp[1] {
+	case 0x00:
+		// no-auth — proceed
+	case 0x02:
+		if user == "" && pass == "" {
+			return fmt.Errorf("socks5 server requires user/pass but none configured")
+		}
+		if len(user) > 255 || len(pass) > 255 {
+			return fmt.Errorf("socks5 user/pass too long (max 255)")
+		}
+		// RFC 1929: VER=1, ULEN, USER, PLEN, PASS
+		req := make([]byte, 0, 3+len(user)+len(pass))
+		req = append(req, 0x01, byte(len(user)))
+		req = append(req, user...)
+		req = append(req, byte(len(pass)))
+		req = append(req, pass...)
+		if _, err := conn.Write(req); err != nil {
+			return fmt.Errorf("socks5 auth write: %w", err)
+		}
+		authResp := make([]byte, 2)
+		if _, err := io.ReadFull(conn, authResp); err != nil {
+			return fmt.Errorf("socks5 auth read: %w", err)
+		}
+		if authResp[0] != 0x01 {
+			return fmt.Errorf("socks5 auth bad version %#x", authResp[0])
+		}
+		if authResp[1] != 0x00 {
+			return fmt.Errorf("socks5 auth rejected status %#x", authResp[1])
+		}
+	default:
 		return fmt.Errorf("socks5 unsupported auth method %#x", greetResp[1])
 	}
 

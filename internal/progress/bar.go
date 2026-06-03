@@ -16,6 +16,7 @@ type Bar struct {
 	errCount     atomic.Int64
 	hostNotFound atomic.Int64
 	processed    atomic.Int64
+	start        time.Time // set in Start(); avg CPM / ETA are computed from this
 }
 
 // New creates a Bar for a run with the given total credential count.
@@ -41,16 +42,57 @@ func (b *Bar) render(speed int64) string {
 		filled = width
 	}
 	bar := strings.Repeat("=", filled) + ">" + strings.Repeat(" ", width-filled)
-	return fmt.Sprintf("\r[%s] %d/%d (%.0f%%) | valid: %d | invalid: %d | error: %d | hnf: %d | %d acc/s",
+
+	// CPM: instant = speed × 60. avg = lifetime processed / elapsed seconds × 60.
+	// ETA derived from avg CPM so a transient stall doesn't blow up the estimate.
+	cpm := speed * 60
+	var avgCPM int64
+	eta := "--"
+	if !b.start.IsZero() {
+		elapsed := time.Since(b.start).Seconds()
+		if elapsed > 0 {
+			avgCPM = int64(float64(proc) / elapsed * 60)
+		}
+		if avgCPM > 0 && proc < b.total {
+			minsLeft := float64(b.total-proc) / float64(avgCPM)
+			eta = formatETA(minsLeft)
+		}
+	}
+
+	return fmt.Sprintf("\r[%s] %d/%d (%.0f%%) | valid: %d | invalid: %d | error: %d | hnf: %d | %d acc/s | CPM %d avg %d | ETA %s",
 		bar, proc, b.total, pct,
 		b.valid.Load(), b.invalid.Load(), b.errCount.Load(), b.hostNotFound.Load(),
-		speed,
+		speed, cpm, avgCPM, eta,
 	)
+}
+
+// formatETA renders minutes as the most informative compact human form.
+//   <1   -> "<1m"
+//   <60  -> "Nm"
+//   <1440 -> "HhMMm"
+//   else -> "DdHHhMMm"
+func formatETA(minutes float64) string {
+	if minutes < 1 {
+		return "<1m"
+	}
+	total := int64(minutes)
+	d := total / (24 * 60)
+	h := (total / 60) % 24
+	m := total % 60
+	switch {
+	case d > 0:
+		return fmt.Sprintf("%dd%02dh%02dm", d, h, m)
+	case h > 0:
+		return fmt.Sprintf("%dh%02dm", h, m)
+	default:
+		return fmt.Sprintf("%dm", m)
+	}
 }
 
 // Start renders the progress bar every 200ms until the returned stop function is called.
 // The stop function prints the final state and blocks until the renderer goroutine exits.
 func (b *Bar) Start() func() {
+	b.start = time.Now()
 	done := make(chan struct{})
 	exited := make(chan struct{})
 	go func() {

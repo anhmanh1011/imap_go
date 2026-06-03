@@ -125,7 +125,7 @@ func TestSOCKS5Handshake_Success(t *testing.T) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 
-	if err := socks5Handshake(conn, "imap.gmail.com:993"); err != nil {
+	if err := socks5Handshake(conn, "imap.gmail.com:993", "", ""); err != nil {
 		t.Errorf("socks5Handshake: %v", err)
 	}
 }
@@ -141,7 +141,7 @@ func TestSOCKS5Handshake_RefusedStatus(t *testing.T) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 
-	err = socks5Handshake(conn, "imap.gmail.com:993")
+	err = socks5Handshake(conn, "imap.gmail.com:993", "", "")
 	if err == nil || !strings.Contains(err.Error(), "connection refused") {
 		t.Errorf("expected 'connection refused' status, got %v", err)
 	}
