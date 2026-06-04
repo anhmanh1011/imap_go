@@ -62,10 +62,11 @@ func Process(ctx context.Context, workers int, dbPath string, pool *proxy.Pool, 
 	for _, c := range creds {
 		select {
 		case <-ctx.Done():
-		default:
+			goto feedDone
+		case credChan <- c:
 		}
-		credChan <- c
 	}
+feedDone:
 	close(credChan)
 	wg.Wait()
 

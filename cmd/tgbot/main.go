@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"imap_checker/internal/proxy"
@@ -42,7 +43,10 @@ func main() {
 	// enqueueRT is set inside the callback once bot is ready; the OnFile closure
 	// captures it by pointer so realtime events enqueue correctly even though
 	// the dispatcher is registered before bot is constructed.
-	var enqueueRT func(tgclient.FileMessage)
+	var (
+		enqueueMu sync.Mutex
+		enqueueRT func(tgclient.FileMessage)
+	)
 
 	tgErr := tgclient.Run(ctx, tgclient.Options{
 		APIID:         cfg.APIID,
@@ -51,8 +55,11 @@ func main() {
 		InputChannel:  cfg.InputChannel,
 		OutputChannel: cfg.OutputChannel,
 		OnFile: func(fm tgclient.FileMessage) {
-			if enqueueRT != nil {
-				enqueueRT(fm)
+			enqueueMu.Lock()
+			fn := enqueueRT
+			enqueueMu.Unlock()
+			if fn != nil {
+				fn(fm)
 			}
 		},
 	}, func(ctx context.Context, c *tgclient.Client) error {
@@ -63,7 +70,9 @@ func main() {
 		enqueue := func(fm tgclient.FileMessage) {
 			bot.Jobs() <- toJob(c, fm)
 		}
+		enqueueMu.Lock()
 		enqueueRT = enqueue
+		enqueueMu.Unlock()
 
 		// Clear incomplete rows so backfill re-processes them.
 		if n, err := state.DeleteIncomplete(); err != nil {

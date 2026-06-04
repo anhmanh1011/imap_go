@@ -140,8 +140,8 @@ func (c *Client) fileMessageFrom(msg tg.MessageClass) (FileMessage, bool) {
 	}, true
 }
 
-// Backfill walks history of the input channel oldest-first and calls onFile
-// for every .txt document found.
+// Backfill walks history of the input channel from newest to oldest, paginating
+// backwards, and calls onFile for every .txt document found.
 func (c *Client) Backfill(ctx context.Context, onFile func(FileMessage)) error {
 	offsetID := 0
 	for {
@@ -198,7 +198,7 @@ func (c *Client) UploadFile(ctx context.Context, path, caption string) error {
 		return fmt.Errorf("upload from path: %w", err)
 	}
 	doc := message.UploadedDocument(f, styling.Plain(caption)).Filename("valid.txt")
-	_, err = message.NewSender(c.api).To(c.outputPeer).Media(ctx, doc)
+	_, err = c.sender.To(c.outputPeer).Media(ctx, doc)
 	return err
 }
 
