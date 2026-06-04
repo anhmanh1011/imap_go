@@ -37,8 +37,8 @@ type Options struct {
 	APIID         int
 	APIHash       string
 	SessionPath   string
-	InputChannel  string // @username
-	OutputChannel string // @username
+	InputChannel  string // channel display title (e.g. "txt_output"), resolved via dialogs
+	OutputChannel string // channel display title (e.g. "valid"), resolved via dialogs
 	OnFile        func(FileMessage) // invoked for realtime .txt messages
 }
 
@@ -63,13 +63,13 @@ func Run(ctx context.Context, opts Options, fn func(ctx context.Context, c *Clie
 		}
 
 		api := client.API()
-		inPeer, inCh, err := resolveChannel(ctx, api, opts.InputChannel)
+		inPeer, inCh, err := resolveChannelByTitle(ctx, api, opts.InputChannel)
 		if err != nil {
-			return fmt.Errorf("resolve input channel: %w", err)
+			return fmt.Errorf("resolve input channel %q: %w", opts.InputChannel, err)
 		}
-		outPeer, _, err := resolveChannel(ctx, api, opts.OutputChannel)
+		outPeer, _, err := resolveChannelByTitle(ctx, api, opts.OutputChannel)
 		if err != nil {
-			return fmt.Errorf("resolve output channel: %w", err)
+			return fmt.Errorf("resolve output channel %q: %w", opts.OutputChannel, err)
 		}
 
 		c := &Client{
@@ -93,21 +93,98 @@ func Run(ctx context.Context, opts Options, fn func(ctx context.Context, c *Clie
 	})
 }
 
-func resolveChannel(ctx context.Context, api *tg.Client, username string) (tg.InputPeerClass, int64, error) {
-	name := strings.TrimPrefix(username, "@")
-	res, err := api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: name})
-	if err != nil {
-		return nil, 0, err
-	}
-	for _, ch := range res.Chats {
-		if channel, ok := ch.(*tg.Channel); ok {
-			return &tg.InputPeerChannel{
-				ChannelID:  channel.ID,
-				AccessHash: channel.AccessHash,
-			}, channel.ID, nil
+// resolveChannelByTitle searches the user's dialogs for a channel whose display
+// title matches (case-insensitive). Works for both public and private channels.
+// Paginates through all dialogs until found or exhausted.
+func resolveChannelByTitle(ctx context.Context, api *tg.Client, title string) (tg.InputPeerClass, int64, error) {
+	var (
+		offsetDate int
+		offsetID   int
+		offsetPeer tg.InputPeerClass = &tg.InputPeerEmpty{}
+	)
+
+	for {
+		res, err := api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+			OffsetDate: offsetDate,
+			OffsetID:   offsetID,
+			OffsetPeer: offsetPeer,
+			Limit:      100,
+			Hash:       0,
+		})
+		if err != nil {
+			return nil, 0, fmt.Errorf("get dialogs: %w", err)
 		}
+
+		var chats []tg.ChatClass
+		var dialogs []tg.DialogClass
+		var msgs []tg.MessageClass
+
+		switch r := res.(type) {
+		case *tg.MessagesDialogs:
+			chats, dialogs, msgs = r.Chats, r.Dialogs, r.Messages
+		case *tg.MessagesDialogsSlice:
+			chats, dialogs, msgs = r.Chats, r.Dialogs, r.Messages
+		default:
+			return nil, 0, fmt.Errorf("channel %q not found in dialogs", title)
+		}
+
+		for _, chat := range chats {
+			if ch, ok := chat.(*tg.Channel); ok && strings.EqualFold(ch.Title, title) {
+				return &tg.InputPeerChannel{
+					ChannelID:  ch.ID,
+					AccessHash: ch.AccessHash,
+				}, ch.ID, nil
+			}
+		}
+
+		if len(dialogs) < 100 {
+			break // last page
+		}
+
+		// Build message map for pagination offset.
+		msgByID := make(map[int]*tg.Message, len(msgs))
+		for _, m := range msgs {
+			if msg, ok := m.(*tg.Message); ok {
+				msgByID[msg.ID] = msg
+			}
+		}
+
+		last, ok := dialogs[len(dialogs)-1].(*tg.Dialog)
+		if !ok || last.TopMessage == 0 {
+			break
+		}
+		lastMsg, ok := msgByID[last.TopMessage]
+		if !ok {
+			break
+		}
+		next := peerToInputPeer(last.Peer, chats)
+		if next == nil {
+			break
+		}
+		offsetDate = lastMsg.Date
+		offsetID = lastMsg.ID
+		offsetPeer = next
 	}
-	return nil, 0, fmt.Errorf("no channel found for %q", username)
+
+	return nil, 0, fmt.Errorf("channel %q not found in dialogs", title)
+}
+
+// peerToInputPeer converts a dialog Peer to an InputPeer using the chats list
+// from the same GetDialogs response.
+func peerToInputPeer(peer tg.PeerClass, chats []tg.ChatClass) tg.InputPeerClass {
+	switch p := peer.(type) {
+	case *tg.PeerChannel:
+		for _, chat := range chats {
+			if ch, ok := chat.(*tg.Channel); ok && ch.ID == p.ChannelID {
+				return &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
+			}
+		}
+	case *tg.PeerUser:
+		return &tg.InputPeerUser{UserID: p.UserID}
+	case *tg.PeerChat:
+		return &tg.InputPeerChat{ChatID: p.ChatID}
+	}
+	return nil
 }
 
 func (c *Client) fileMessageFrom(msg tg.MessageClass) (FileMessage, bool) {
