@@ -47,7 +47,23 @@ func newTestBot(t *testing.T, out Output, process ProcessFunc) *Bot {
 		out:     out,
 		process: process,
 		workDir: t.TempDir(),
-		jobs:    make(chan Job, 4),
+		jobs:    make(chan Job, jobsBufSize),
+		ready:   make(chan readyJob, readyBufSize),
+	}
+}
+
+// runJob is a test helper that runs both pipeline stages synchronously.
+func runJob(b *Bot, job Job) {
+	ctx := context.Background()
+	b.downloadJob(ctx, job)
+	// Drain ready channel synchronously.
+	for {
+		select {
+		case rj := <-b.ready:
+			b.processReady(ctx, rj)
+		default:
+			return
+		}
 	}
 }
 
@@ -61,7 +77,7 @@ func TestProcessJobSuccessWithValid(t *testing.T) {
 	}
 	b := newTestBot(t, out, process)
 
-	b.processJob(context.Background(), writeJob(100, "creds.txt", "a@x:1\n"))
+	runJob(b, writeJob(100, "creds.txt", "a@x:1\n"))
 
 	if len(out.uploads) != 1 {
 		t.Fatalf("uploads = %d, want 1", len(out.uploads))
@@ -82,7 +98,7 @@ func TestProcessJobZeroValidSendsTextOnly(t *testing.T) {
 	}
 	b := newTestBot(t, out, process)
 
-	b.processJob(context.Background(), writeJob(101, "creds.txt", "x\n"))
+	runJob(b, writeJob(101, "creds.txt", "x\n"))
 
 	if len(out.uploads) != 0 {
 		t.Errorf("uploads = %d, want 0 (no file when Valid==0)", len(out.uploads))
@@ -104,8 +120,8 @@ func TestProcessJobDedup(t *testing.T) {
 	}
 	b := newTestBot(t, out, process)
 
-	b.processJob(context.Background(), writeJob(102, "c.txt", "x\n"))
-	b.processJob(context.Background(), writeJob(102, "c.txt", "x\n"))
+	runJob(b, writeJob(102, "c.txt", "x\n"))
+	runJob(b, writeJob(102, "c.txt", "x\n")) // duplicate
 
 	if calls != 1 {
 		t.Fatalf("process called %d times, want 1 (dedup)", calls)
@@ -119,7 +135,7 @@ func TestProcessJobErrorMarksAndNotifies(t *testing.T) {
 	}
 	b := newTestBot(t, out, process)
 
-	b.processJob(context.Background(), writeJob(103, "c.txt", "x\n"))
+	runJob(b, writeJob(103, "c.txt", "x\n"))
 
 	ids, _ := b.state.IncompleteIDs()
 	for _, id := range ids {
