@@ -94,5 +94,16 @@ func (s *State) IncompleteIDs() ([]int64, error) {
 	return ids, rows.Err()
 }
 
+// DeleteIncomplete removes rows for runs that never finished (valid_count = -1)
+// so they are reprocessed by the next backfill.
+func (s *State) DeleteIncomplete() (int, error) {
+	res, err := s.db.Exec("DELETE FROM processed WHERE valid_count = -1")
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // Close closes the underlying DB.
 func (s *State) Close() error { return s.db.Close() }

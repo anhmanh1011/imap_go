@@ -55,3 +55,23 @@ func TestStateIncompleteIDs(t *testing.T) {
 		t.Fatalf("IncompleteIDs = %v; want [100]", ids)
 	}
 }
+
+func TestStateDeleteIncomplete(t *testing.T) {
+	st := newTestState(t)
+	st.Insert(1, 1)      // incomplete
+	st.Insert(2, 1)
+	st.Complete(2, 5, 5) // complete
+	n, err := st.DeleteIncomplete()
+	if err != nil {
+		t.Fatalf("DeleteIncomplete: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("deleted %d, want 1", n)
+	}
+	if has, _ := st.Has(1); has {
+		t.Fatal("msg 1 should be gone")
+	}
+	if has, _ := st.Has(2); !has {
+		t.Fatal("msg 2 should remain")
+	}
+}
