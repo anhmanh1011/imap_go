@@ -265,15 +265,71 @@ func (c *Client) Backfill(ctx context.Context, onFile func(FileMessage)) error {
 }
 
 // Download saves the document attached to fm into the file at dst.
+// On FILE_REFERENCE_EXPIRED it re-fetches the message to get a fresh
+// file reference and retries once.
 func (c *Client) Download(ctx context.Context, fm FileMessage, dst string) error {
-	loc := &tg.InputDocumentFileLocation{
-		ID:            fm.doc.ID,
-		AccessHash:    fm.doc.AccessHash,
-		FileReference: fm.doc.FileReference,
-		ThumbSize:     "",
+	for attempt := 0; attempt < 2; attempt++ {
+		loc := &tg.InputDocumentFileLocation{
+			ID:            fm.doc.ID,
+			AccessHash:    fm.doc.AccessHash,
+			FileReference: fm.doc.FileReference,
+			ThumbSize:     "",
+		}
+		_, err := downloader.NewDownloader().Download(c.api, loc).ToPath(ctx, dst)
+		if err == nil {
+			return nil
+		}
+		if attempt == 0 && strings.Contains(err.Error(), "FILE_REFERENCE_EXPIRED") {
+			log.Printf("tgbot: file reference expired for msg#%d, refreshing...", fm.MessageID)
+			freshRef, rerr := c.refreshFileReference(ctx, fm.MessageID)
+			if rerr != nil {
+				return fmt.Errorf("refresh file reference: %w", rerr)
+			}
+			fm.doc.FileReference = freshRef
+			continue
+		}
+		return err
 	}
-	_, err := downloader.NewDownloader().Download(c.api, loc).ToPath(ctx, dst)
-	return err
+	return nil
+}
+
+// refreshFileReference re-fetches the message from the input channel and
+// returns the current file reference for its document.
+func (c *Client) refreshFileReference(ctx context.Context, msgID int64) ([]byte, error) {
+	inputCh, ok := c.inputPeer.(*tg.InputPeerChannel)
+	if !ok {
+		return nil, fmt.Errorf("input peer is not a channel")
+	}
+	msgs, err := c.api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+		Channel: &tg.InputChannel{
+			ChannelID:  inputCh.ChannelID,
+			AccessHash: inputCh.AccessHash,
+		},
+		ID: []tg.InputMessageClass{&tg.InputMessageID{ID: int(msgID)}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get message: %w", err)
+	}
+	chMsgs, ok := msgs.(*tg.MessagesChannelMessages)
+	if !ok {
+		return nil, fmt.Errorf("unexpected type %T", msgs)
+	}
+	for _, msg := range chMsgs.Messages {
+		m, ok := msg.(*tg.Message)
+		if !ok || int64(m.ID) != msgID {
+			continue
+		}
+		media, ok := m.Media.(*tg.MessageMediaDocument)
+		if !ok {
+			continue
+		}
+		doc, ok := media.Document.(*tg.Document)
+		if !ok {
+			continue
+		}
+		return doc.FileReference, nil
+	}
+	return nil, fmt.Errorf("message %d not found or has no document", msgID)
 }
 
 // UploadFile uploads the file at path to the output channel with caption.
