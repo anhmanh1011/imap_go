@@ -47,7 +47,8 @@ TG_API_ID=12345678
 TG_API_HASH=abc123...
 TG_SESSION_FILE=./main.session   # gotd/td native FileStorage JSON
 
-# Channels — username (@foo) or numeric ID (-1001234567890)
+# Channels — @username form only (v1); numeric IDs (-100…) require a dialogs
+# lookup for the access hash and are deferred to a future version.
 TG_INPUT_CHANNEL=@my_input_channel
 TG_OUTPUT_CHANNEL=@my_output_channel
 

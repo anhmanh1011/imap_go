@@ -9,3 +9,12 @@ Servers.db
 
 # Output
 output/
+
+# Telegram bot
+/main.session
+/tgbot.env
+/tgbot_state.db
+/tgbot_state.db-shm
+/tgbot_state.db-wal
+/tgbot_workdir/
+/tgbot
