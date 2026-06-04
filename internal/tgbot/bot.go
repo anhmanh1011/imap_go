@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Job is one downloadable .txt message pulled from the input channel.
@@ -83,9 +84,20 @@ func (b *Bot) processJob(ctx context.Context, job Job) {
 	defer os.RemoveAll(runDir)
 
 	inputPath := filepath.Join(runDir, "input.txt")
+	dlStart := time.Now()
 	if err := job.Download(ctx, inputPath); err != nil {
 		log.Printf("tgbot: download msg#%d: %v", job.MessageID, err)
 		return
+	}
+	if fi, err := os.Stat(inputPath); err == nil {
+		elapsed := time.Since(dlStart).Seconds()
+		sizeMB := float64(fi.Size()) / 1024 / 1024
+		var speed string
+		if elapsed > 0 {
+			speed = fmt.Sprintf("%.1f MB/s", sizeMB/elapsed)
+		}
+		log.Printf("tgbot: downloaded msg#%d %q → %.2f MB in %.1fs (%s)",
+			job.MessageID, job.FileName, sizeMB, elapsed, speed)
 	}
 
 	if err := b.state.Insert(job.MessageID, job.ChannelID); err != nil {

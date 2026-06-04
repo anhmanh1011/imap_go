@@ -61,3 +61,99 @@ The original spec and the task-by-task implementation plan live at:
 - `docs/superpowers/plans/2026-06-02-imap-checker.md`
 
 The plan's code samples for `internal/checker/` are out of date vs the go-imap quirks above. Prefer the code over the plan when they disagree.
+
+---
+
+## tgbot — Telegram userbot
+
+Standalone bot that watches a Telegram input channel for `.txt` credential files, runs the IMAP checker on each, and uploads `valid.txt` to an output channel.
+
+### Build & run
+
+```bash
+go build -o tgbot ./cmd/tgbot
+
+# Run directly:
+./tgbot tgbot.env
+
+# Run via PM2 (preferred — autorestart, logs to logs/pm2-tgbot.*.log):
+pm2 start ecosystem.config.js --only tgbot
+pm2 logs tgbot
+pm2 restart tgbot
+pm2 stop tgbot
+```
+
+### Config — `tgbot.env` (gitignored)
+
+```env
+TG_API_ID=<from my.telegram.org>
+TG_API_HASH=<from my.telegram.org>
+TG_SESSION_FILE=./main.session        # gotd/td native JSON session (gitignored)
+TG_INPUT_CHANNEL=txt_output           # channel display title (not @username)
+TG_OUTPUT_CHANNEL=valid               # channel display title (not @username)
+WORKERS=5000
+PROXIES_FILE=./proxies/rotating.txt
+DB_PATH=./Servers.db
+WORK_DIR=./tgbot_workdir
+STATE_DB=./tgbot_state.db
+```
+
+Channel names are resolved by **display title** via `messages.GetDialogs` — works with private channels. Do NOT use `@username` form.
+
+`main.session` must be in gotd/td native `FileStorage` format (`{"Version":1,"Data":{...}}`). Telethon/Pyrogram `.session` files are incompatible.
+
+### Architecture
+
+```
+Telegram input channel (txt_output)
+        │  realtime UpdateNewChannelMessage
+        │  backfill MessagesGetHistory
+        ▼
+  tgclient.Client           ← internal/tgclient/client.go
+  resolveChannelByTitle()   ← searches dialogs by display title
+        │
+        ▼ Job{MessageID, FileName, Download closure}
+  jobChan (cap=10)
+        │
+        ▼ (sequential — one checker run at a time)
+  tgbot.Bot.processJob()    ← internal/tgbot/bot.go
+    download → insert state(-1) → Process() → upload valid.txt
+        │
+        ▼
+  tgbot.Process()           ← internal/tgbot/processor.go
+    ParseFile → FilterBlocked → BatchLookup → N workers → result.Writer
+    (progress bar disabled; logs CPM every 30s)
+        │
+        ▼
+  Telegram output channel (valid)
+    ✅ Done: msg#N | total: X | valid: Y
+    [valid.txt attached]
+```
+
+### State DB — `tgbot_state.db`
+
+Tracks processed message IDs. `valid_count` sentinels:
+- `-1` = crash mid-run → deleted by `DeleteIncomplete` on restart → retried
+- `-2` = non-retryable error → kept, output channel notified
+- `≥0` = success
+
+### Logs (PM2)
+
+```
+logs/pm2-tgbot.out.log   # stdout (unused — all output goes to stderr)
+logs/pm2-tgbot.err.log   # all log lines including progress
+```
+
+Progress line format (every 30s):
+```
+tgbot: progress 48979/264675 | CPM inst=50746 avg=48978 | valid=15
+```
+
+Download line format:
+```
+tgbot: downloaded msg#684 "filename.txt" → 15.00 MB in 1.9s (7.7 MB/s)
+```
+
+### Spec & plan
+- `docs/superpowers/specs/2026-06-04-tgbot-design.md`
+- `docs/superpowers/plans/2026-06-04-tgbot.md`

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/gotd/td/session"
@@ -221,7 +222,10 @@ func (c *Client) fileMessageFrom(msg tg.MessageClass) (FileMessage, bool) {
 // backwards, and calls onFile for every .txt document found.
 func (c *Client) Backfill(ctx context.Context, onFile func(FileMessage)) error {
 	offsetID := 0
+	page := 0
 	for {
+		page++
+		log.Printf("tgbot: backfill page %d (offsetID=%d)", page, offsetID)
 		hist, err := c.api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
 			Peer:     c.inputPeer,
 			OffsetID: offsetID,
@@ -230,24 +234,29 @@ func (c *Client) Backfill(ctx context.Context, onFile func(FileMessage)) error {
 		if err != nil {
 			return fmt.Errorf("get history: %w", err)
 		}
+		log.Printf("tgbot: backfill page %d got response type %T", page, hist)
 		ch, ok := hist.(*tg.MessagesChannelMessages)
 		if !ok {
 			return fmt.Errorf("unexpected history type %T", hist)
 		}
+		log.Printf("tgbot: backfill page %d: %d messages", page, len(ch.Messages))
 		if len(ch.Messages) == 0 {
 			return nil
 		}
 		minID := offsetID
+		found := 0
 		for _, mc := range ch.Messages {
 			if m, ok := mc.(*tg.Message); ok {
 				if minID == 0 || m.ID < minID {
 					minID = m.ID
 				}
 				if fm, ok := c.fileMessageFrom(m); ok {
+					found++
 					onFile(fm)
 				}
 			}
 		}
+		log.Printf("tgbot: backfill page %d: %d .txt files enqueued, minID=%d", page, found, minID)
 		if minID == offsetID || minID == 0 {
 			return nil
 		}

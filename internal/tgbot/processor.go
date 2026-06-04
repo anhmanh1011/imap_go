@@ -3,9 +3,12 @@ package tgbot
 import (
 	"bufio"
 	"context"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"imap_checker/internal/checker"
 	"imap_checker/internal/db"
@@ -50,12 +53,42 @@ func Process(ctx context.Context, workers int, dbPath string, pool *proxy.Pool, 
 
 	credChan := make(chan checker.Credential, workers*2)
 	var wg sync.WaitGroup
+
+	// Progress reporter: logs CPM and counts every 30s.
+	var processed atomic.Int64
+	startTime := time.Now()
+	stopProgress := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		var last int64
+		for {
+			select {
+			case <-stopProgress:
+				return
+			case <-ticker.C:
+				cur := processed.Load()
+				delta := cur - last
+				last = cur
+				elapsed := time.Since(startTime).Seconds()
+				var avgCPM int64
+				if elapsed > 0 {
+					avgCPM = int64(float64(cur) / elapsed * 60)
+				}
+				log.Printf("tgbot: progress %d/%d | CPM inst=%d avg=%d | valid=%d",
+					cur, len(creds), delta*2, avgCPM,
+					countFileLinesQuick(filepath.Join(outDir, "valid.txt")))
+			}
+		}
+	}()
+
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for cred := range credChan {
 				chk.Check(cred)
+				processed.Add(1)
 			}
 		}()
 	}
@@ -69,6 +102,7 @@ func Process(ctx context.Context, workers int, dbPath string, pool *proxy.Pool, 
 feedDone:
 	close(credChan)
 	wg.Wait()
+	close(stopProgress)
 
 	stopFlush()
 	closeErr := writer.Close()
@@ -79,6 +113,12 @@ feedDone:
 		return Result{}, err
 	}
 	return Result{Total: len(creds), Valid: valid, ValidTxtPath: validPath}, closeErr
+}
+
+// countFileLinesQuick returns line count without error (0 on any failure). Fast path for logging.
+func countFileLinesQuick(path string) int {
+	n, _ := countFileLines(path)
+	return n
 }
 
 // countFileLines counts non-empty lines in path. A missing file returns 0, nil.
