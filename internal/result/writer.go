@@ -27,6 +27,8 @@ type Result struct {
 	Pass   string
 	Status Status
 	Reason string // set for Error status only
+	Server string // set for Valid status
+	Port   int    // set for Valid status
 }
 
 var fileNames = [4]string{"valid.txt", "invalid.txt", "error.txt", "host_not_found.txt"}
@@ -79,9 +81,12 @@ func sanitizeReason(s string) string {
 func (w *Writer) Write(r Result) {
 	idx := int(r.Status)
 	w.mu[idx].Lock()
-	if r.Status == Error {
+	switch r.Status {
+	case Valid:
+		fmt.Fprintf(w.bufs[idx], "%s:%s:%s:%d\n", r.User, r.Pass, r.Server, r.Port)
+	case Error:
 		fmt.Fprintf(w.bufs[idx], "%s:%s:%s\n", r.User, r.Pass, sanitizeReason(r.Reason))
-	} else {
+	default:
 		fmt.Fprintf(w.bufs[idx], "%s:%s\n", r.User, r.Pass)
 	}
 	w.mu[idx].Unlock()

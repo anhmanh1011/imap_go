@@ -14,7 +14,7 @@ func TestWriter_RoutesCorrectly(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	w.Write(Result{User: "a@x.com", Pass: "p1", Status: Valid})
+	w.Write(Result{User: "a@x.com", Pass: "p1", Status: Valid, Server: "imap.x.com", Port: 993})
 	w.Write(Result{User: "b@x.com", Pass: "p2", Status: Invalid})
 	w.Write(Result{User: "c@x.com", Pass: "p3", Status: Error, Reason: "timeout"})
 	w.Write(Result{User: "d@x.com", Pass: "p4", Status: HostNotFound})
@@ -24,7 +24,7 @@ func TestWriter_RoutesCorrectly(t *testing.T) {
 	}
 
 	cases := []struct{ file, want string }{
-		{"valid.txt", "a@x.com:p1\n"},
+		{"valid.txt", "a@x.com:p1:imap.x.com:993\n"},
 		{"invalid.txt", "b@x.com:p2\n"},
 		{"error.txt", "c@x.com:p3:timeout\n"},
 		{"host_not_found.txt", "d@x.com:p4\n"},

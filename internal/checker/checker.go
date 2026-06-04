@@ -128,6 +128,10 @@ func (c *Checker) Check(cred Credential) {
 	} else {
 		res.Status = status
 		res.Reason = reason
+		if status == result.Valid {
+			res.Server = info.Host
+			res.Port = info.Port
+		}
 	}
 
 	c.results.Write(res)
