@@ -75,6 +75,10 @@ var blockedDomains = func() map[string]struct{} {
 		// No IMAP — proprietary protocol only, by design.
 		"tuta.com", "tutanota.com", "tutanota.de", "tutamail.com", "keemail.me",
 
+		// ── Google / Gmail ────────────────────────────────────────────────────────
+		// Plain-password IMAP killed May 2022; App Password required since then.
+		"gmail.com", "googlemail.com",
+
 		// ── QQ Mail (China) ───────────────────────────────────────────────────────
 		// Requires a 16-char "authorization code" (not the QQ account password).
 		// Plain password always returns AUTH FAILED.

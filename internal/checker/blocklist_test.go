@@ -36,8 +36,10 @@ func TestIsBlocked(t *testing.T) {
 		{"163.com", true},
 		{"126.com", true},
 		{"ukr.net", true},
+		// Google — App Password required since May 2022
+		{"gmail.com", true},
+		{"googlemail.com", true},
 		// Should NOT be blocked
-		{"gmail.com", false},
 		{"rambler.ru", false},
 		{"mail.ru", false},
 		{"notinteria.pl", false},  // shares suffix but not a subdomain
@@ -52,9 +54,9 @@ func TestIsBlocked(t *testing.T) {
 
 func TestFilterBlocked(t *testing.T) {
 	creds := []Credential{
-		{User: "a@gmail.com", Pass: "p1", Domain: "gmail.com"},
+		{User: "a@rambler.ru", Pass: "p1", Domain: "rambler.ru"},
 		{User: "b@interia.pl", Pass: "p2", Domain: "interia.pl"},
-		{User: "c@szkola.int.pl", Pass: "p3", Domain: "szkola.int.pl"},
+		{User: "c@gmail.com", Pass: "p3", Domain: "gmail.com"},
 		{User: "d@outlook.com", Pass: "p4", Domain: "outlook.com"},
 	}
 	kept, skipped := FilterBlocked(creds)
@@ -64,7 +66,7 @@ func TestFilterBlocked(t *testing.T) {
 	if len(kept) != 1 {
 		t.Errorf("len(kept) = %d, want 1", len(kept))
 	}
-	if kept[0].Domain != "gmail.com" {
+	if kept[0].Domain != "rambler.ru" {
 		t.Errorf("unexpected kept domain: %v", kept[0].Domain)
 	}
 }
