@@ -58,6 +58,11 @@ func main() {
 	}
 	log.Printf("loaded %d credentials", len(creds))
 
+	creds, skipped := checker.FilterBlocked(creds)
+	if skipped > 0 {
+		log.Printf("skipped %d credentials from blocklisted domains (no IMAP support)", skipped)
+	}
+
 	domains := checker.UniqueDomains(creds)
 	log.Printf("resolving %d unique domains from %s ...", len(domains), *dbFlag)
 	domainMap, err := db.BatchLookup(*dbFlag, domains)
