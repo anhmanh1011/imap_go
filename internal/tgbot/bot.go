@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	downloaderCount = 3  // concurrent Telegram downloads
+	downloaderCount = 1   // Telegram throttles hard on concurrent downloads — keep 1
 	jobsBufSize     = 100 // incoming job queue
 	readyBufSize    = 5   // downloaded-and-waiting-for-IMAP queue
 )
