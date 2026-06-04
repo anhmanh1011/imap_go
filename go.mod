@@ -11,4 +11,6 @@ require (
 require (
 	github.com/emersion/go-message v0.18.2 // indirect
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
+	github.com/gotd/td v0.145.1 // indirect
+	github.com/joho/godotenv v1.5.1 // indirect
 )
