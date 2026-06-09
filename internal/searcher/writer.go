@@ -43,9 +43,9 @@ func NewWriter(outDir string) (*Writer, error) {
 }
 
 // WriteFound records an account where N matching emails were found.
-func (w *Writer) WriteFound(user, pass string, n int) {
+func (w *Writer) WriteFound(user, pass, server string, port, n int) {
 	w.mu[0].Lock()
-	fmt.Fprintf(w.bufs[0], "%s:%s:%d\n", user, pass, n)
+	fmt.Fprintf(w.bufs[0], "%s:%s:%s:imap:%d:%d\n", user, pass, server, port, n)
 	w.mu[0].Unlock()
 }
 

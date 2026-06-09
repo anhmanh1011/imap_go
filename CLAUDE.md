@@ -49,7 +49,8 @@ If you upgrade `go-imap/v2`, re-verify these against the new source; the plan in
 ## Output format
 
 Four files in `-out`:
-- `valid.txt`, `invalid.txt`, `host_not_found.txt`: `user:pass\n`
+- `valid.txt`: `user:pass:imap_host:imap:port\n`
+- `invalid.txt`, `host_not_found.txt`: `user:pass\n`
 - `error.txt`: `user:pass:reason\n` where `reason` is layer-prefixed (`dial:`, `tls:`, `starttls:`, `login:`) and sanitized (CR/LF stripped, capped at 200 B). Downstream parsers can split on the **first** two `:` only — passwords may legitimately contain `:`.
 
 `Writer.Close` returns the first I/O error observed during the run via `errors.Join`. `main.go` logs it as a warning; treat a non-nil return as "results may be incomplete," not a soft warning.
@@ -96,6 +97,9 @@ PROXIES_FILE=./proxies/rotating.txt
 DB_PATH=./Servers.db
 WORK_DIR=./tgbot_workdir
 STATE_DB=./tgbot_state.db
+# Optional: inbox search mode — if set, only accounts with ≥1 email FROM this
+# address are uploaded as "valid". Accepts full address or domain suffix.
+# SEARCH_FROM=donotreply@godaddy.com
 ```
 
 Channel names are resolved by **display title** via `messages.GetDialogs` — works with private channels. Do NOT use `@username` form.

@@ -55,7 +55,7 @@ func (s *Searcher) Search(cred checker.Credential) {
 		s.writer.WriteError(cred.User, cred.Pass, err.Error())
 		s.bar.IncError()
 	case count > 0:
-		s.writer.WriteFound(cred.User, cred.Pass, count)
+		s.writer.WriteFound(cred.User, cred.Pass, info.Host, info.Port, count)
 		s.bar.IncValid()
 	default:
 		s.writer.WriteNotFound(cred.User, cred.Pass)
@@ -115,9 +115,15 @@ func (s *Searcher) doSearch(cred checker.Credential, addr string, port int) (int
 		return 0, fmt.Errorf("select: %w", err)
 	}
 
+	// If target already contains "@" treat it as a full address (e.g.
+	// "donotreply@godaddy.com"); otherwise search by domain suffix.
+	searchVal := s.target
+	if !strings.Contains(s.target, "@") {
+		searchVal = "@" + s.target
+	}
 	criteria := &imap.SearchCriteria{
 		Header: []imap.SearchCriteriaHeaderField{
-			{Key: "From", Value: "@" + s.target},
+			{Key: "From", Value: searchVal},
 		},
 	}
 	data, err := client.Search(criteria, nil).Wait()

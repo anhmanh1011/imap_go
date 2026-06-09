@@ -16,7 +16,7 @@ func TestWriter_Found(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.WriteFound("user@example.com", "pass", 3)
+	w.WriteFound("user@example.com", "pass", "imap.example.com", 993, 3)
 	w.WriteNotFound("user2@example.com", "pass2")
 	w.WriteError("user3@example.com", "pass3", "login: timeout")
 	if err := w.Close(); err != nil {
@@ -33,7 +33,7 @@ func TestWriter_Found(t *testing.T) {
 			t.Errorf("%s: got %q, want %q", name, string(got), want)
 		}
 	}
-	check("found.txt", "user@example.com:pass:3")
+	check("found.txt", "user@example.com:pass:imap.example.com:imap:993:3")
 	check("not_found.txt", "user2@example.com:pass2")
 	check("error.txt", "user3@example.com:pass3:login: timeout")
 }

@@ -35,9 +35,9 @@ var fileNames = [4]string{"valid.txt", "invalid.txt", "error.txt", "host_not_fou
 
 // Writer writes results to 4 categorized, buffered output files.
 type Writer struct {
-	bufs    [4]*bufio.Writer
-	mu      [4]sync.Mutex
-	files   [4]*os.File
+	bufs     [4]*bufio.Writer
+	mu       [4]sync.Mutex
+	files    [4]*os.File
 	writeErr atomic.Pointer[error] // first I/O error observed by Flush, surfaced on Close
 }
 
@@ -83,7 +83,7 @@ func (w *Writer) Write(r Result) {
 	w.mu[idx].Lock()
 	switch r.Status {
 	case Valid:
-		fmt.Fprintf(w.bufs[idx], "%s:%s:%s:%d\n", r.User, r.Pass, r.Server, r.Port)
+		fmt.Fprintf(w.bufs[idx], "%s:%s:%s:imap:%d\n", r.User, r.Pass, r.Server, r.Port)
 	case Error:
 		fmt.Fprintf(w.bufs[idx], "%s:%s:%s\n", r.User, r.Pass, sanitizeReason(r.Reason))
 	default:

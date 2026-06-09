@@ -111,7 +111,8 @@ dial TCP → [HTTP CONNECT if proxy] → TLS handshake → IMAP LOGIN
 - Each writer protected by `sync.Mutex`
 - Flush every 100ms via background ticker, and on shutdown
 - Output format:
-  - `valid.txt`, `invalid.txt`, `host_not_found.txt` → `user:pass`
+  - `valid.txt` → `user:pass:imap_host:imap:port`
+  - `invalid.txt`, `host_not_found.txt` → `user:pass`
   - `error.txt` → `user:pass:reason`
 
 ### 4.5 `internal/progress` — Progress Bar

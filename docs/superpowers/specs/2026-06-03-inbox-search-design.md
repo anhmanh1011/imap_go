@@ -53,7 +53,7 @@ Each worker pulls a `checker.Credential` from a buffered channel and calls `sear
 4. **SELECT INBOX** — `client.Select("INBOX", nil).Wait()`; on failure → `error`
 5. **SEARCH** — `client.Search(&imap.SearchCriteria{Header: [{Key:"From", Value:"@<target>"}]}, nil).Wait()`
 6. Classify result:
-   - N > 0 → `found` (write `user:pass:N` to `found.txt`)
+   - N > 0 → `found` (write `user:pass:imap_host:imap:port:N` to `found.txt`)
    - N = 0 → `not_found` (write `user:pass` to `not_found.txt`)
    - error → write `user:pass:reason` to `error.txt`
 
@@ -63,7 +63,7 @@ All written to the `-out` directory:
 
 | File | Format | Description |
 |------|--------|-------------|
-| `found.txt` | `user:pass:N` | Accounts with N emails from target domain |
+| `found.txt` | `user:pass:imap_host:imap:port:N` | Accounts with N emails from target domain |
 | `not_found.txt` | `user:pass` | Accounts with no emails from target domain |
 | `error.txt` | `user:pass:reason` | Login/search failures |
 

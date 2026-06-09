@@ -24,7 +24,7 @@ func TestWriter_RoutesCorrectly(t *testing.T) {
 	}
 
 	cases := []struct{ file, want string }{
-		{"valid.txt", "a@x.com:p1:imap.x.com:993\n"},
+		{"valid.txt", "a@x.com:p1:imap.x.com:imap:993\n"},
 		{"invalid.txt", "b@x.com:p2\n"},
 		{"error.txt", "c@x.com:p3:timeout\n"},
 		{"host_not_found.txt", "d@x.com:p4\n"},
