@@ -24,7 +24,7 @@ A standalone binary `inbox_search` that takes a list of verified IMAP credential
 | Flag | Required | Default | Description |
 |------|----------|---------|-------------|
 | `-input` | yes | — | Credential file (`user:pass` per line) |
-| `-workers` | yes | — | Concurrent goroutines (hard cap 8000) |
+| `-workers` | yes | — | Concurrent goroutines (hard cap 20000) |
 | `-target` | yes | — | Domain to search, e.g. `godaddy.com` → searches `FROM "@godaddy.com"` |
 | `-out` | no | `./search_out` | Output directory |
 | `-db` | no | `./Servers.db` | Path to IMAP server DB |

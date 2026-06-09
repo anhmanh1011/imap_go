@@ -10,7 +10,7 @@ module.exports = {
       args: [
         '-input', 'input.txt',
         '-proxies', 'proxies/rotating.txt',
-        '-workers', '5000',
+        '-workers', '20000',
         '-db', './Servers.db',
         '-out', 'output/run-w5000-budgetpool-20260603',
       ],

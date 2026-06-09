@@ -15,17 +15,17 @@ import (
 	"imap_checker/internal/searcher"
 )
 
-const maxWorkers = 8000
+const maxWorkers = 20000
 
 func main() {
-	inputFlag        := flag.String("input", "", "credential file (user:pass per line) [required]")
-	workersFlag      := flag.Int("workers", 0, "concurrent goroutines (hard cap 8000) [required]")
-	targetFlag       := flag.String("target", "", "domain to search in FROM header, e.g. godaddy.com [required]")
-	proxiesFlag      := flag.String("proxies", "", "HTTP-CONNECT proxy file (ip:port per line) [optional]")
-	proxyURLFlag     := flag.String("proxy-url", "", "SOCKS5 proxy list URL, refreshed periodically [optional]")
+	inputFlag := flag.String("input", "", "credential file (user:pass per line) [required]")
+	workersFlag := flag.Int("workers", 0, "concurrent goroutines (hard cap 20000) [required]")
+	targetFlag := flag.String("target", "", "domain to search in FROM header, e.g. godaddy.com [required]")
+	proxiesFlag := flag.String("proxies", "", "HTTP-CONNECT proxy file (ip:port per line) [optional]")
+	proxyURLFlag := flag.String("proxy-url", "", "SOCKS5 proxy list URL, refreshed periodically [optional]")
 	proxyRefreshFlag := flag.Duration("proxy-refresh", 10*time.Minute, "interval to re-fetch -proxy-url")
-	dbFlag           := flag.String("db", "./Servers.db", "path to Servers.db")
-	outFlag          := flag.String("out", "./search_out", "output directory")
+	dbFlag := flag.String("db", "./Servers.db", "path to Servers.db")
+	outFlag := flag.String("out", "./search_out", "output directory")
 	flag.Parse()
 
 	if *inputFlag == "" {

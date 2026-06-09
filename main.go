@@ -15,11 +15,11 @@ import (
 	"imap_checker/internal/result"
 )
 
-const maxWorkers = 8000
+const maxWorkers = 20000
 
 func main() {
 	inputFlag := flag.String("input", "", "credential file (user:pass per line) [required]")
-	workersFlag := flag.Int("workers", 0, "number of concurrent goroutines (hard cap 8000) [required]")
+	workersFlag := flag.Int("workers", 0, "number of concurrent goroutines (hard cap 20000) [required]")
 	proxiesFlag := flag.String("proxies", "", "HTTP-CONNECT proxy file (ip:port per line) [optional]")
 	proxyURLFlag := flag.String("proxy-url", "", "SOCKS5 proxy list URL, refreshed periodically [optional]")
 	proxyRefreshFlag := flag.Duration("proxy-refresh", 10*time.Minute, "interval to re-fetch -proxy-url")
