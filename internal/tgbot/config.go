@@ -25,6 +25,7 @@ type Config struct {
 	DBPath       string
 	WorkDir      string
 	StateDB      string
+	SearchFrom   string // if set, run inbox-search for this address instead of plain checker
 }
 
 // Load reads configuration from environment variables. If envPath is
@@ -51,6 +52,7 @@ func Load(envPath string) (Config, error) {
 	c.OutputChannel = os.Getenv("TG_OUTPUT_CHANNEL")
 	c.ProxiesFile = os.Getenv("PROXIES_FILE")
 	c.ProxyURL = os.Getenv("PROXY_URL")
+	c.SearchFrom = os.Getenv("SEARCH_FROM")
 	c.DBPath = getenvDefault("DB_PATH", "./Servers.db")
 	c.WorkDir = getenvDefault("WORK_DIR", "./tgbot_workdir")
 	c.StateDB = getenvDefault("STATE_DB", "./tgbot_state.db")

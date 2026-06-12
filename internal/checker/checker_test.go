@@ -18,6 +18,9 @@ func TestParseLine(t *testing.T) {
 	}{
 		{"user@gmail.com:secret", "user@gmail.com", "secret", "gmail.com", true},
 		{"user@example.com:p:a:s:s", "user@example.com", "p:a:s:s", "example.com", true},
+		{"https://example.com:user@example.com:p:a:s:s", "user@example.com", "p:a:s:s", "example.com", true},
+		{"com.example.app:user@example.com:secret", "user@example.com", "secret", "example.com", true},
+		{"https://example.com:plainuser:user@example.com", "", "", "", false},
 		{"user@domain.com:", "user@domain.com", "", "domain.com", true},
 		{"noatsign:pass", "", "", "", false},
 		{":pass", "", "", "", false},

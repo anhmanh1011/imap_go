@@ -37,6 +37,9 @@ func main() {
 	defer stop()
 
 	process := func(ctx context.Context, inputPath, outDir string) (tgbot.Result, error) {
+		if cfg.SearchFrom != "" {
+			return tgbot.ProcessSearch(ctx, cfg.Workers, cfg.DBPath, pool, inputPath, outDir, cfg.SearchFrom)
+		}
 		return tgbot.Process(ctx, cfg.Workers, cfg.DBPath, pool, inputPath, outDir)
 	}
 

@@ -47,24 +47,38 @@ type Credential struct {
 	Domain string
 }
 
-// parseLine parses a single "user:pass" line.
-// Splits on the first ":" so passwords may contain ":".
-// Returns ok=false for lines without "@" in user or without ":".
+// parseLine parses either "user:pass" or ULP-style "url:user:pass" lines.
+// It takes the colon-delimited field containing an email address as the user
+// and everything after that field's ":" as the password.
 func parseLine(line string) (user, pass, domain string, ok bool) {
-	idx := strings.Index(line, ":")
-	if idx < 0 {
-		return
+	for idx := strings.Index(line, ":"); idx >= 0; {
+		fieldStart := strings.LastIndex(line[:idx], ":") + 1
+		candidate := strings.TrimSpace(line[fieldStart:idx])
+		if isEmailCandidate(candidate) {
+			user = candidate
+			pass = line[idx+1:]
+			at := strings.LastIndex(user, "@")
+			domain = user[at+1:]
+			return user, pass, domain, true
+		}
+		next := strings.Index(line[idx+1:], ":")
+		if next < 0 {
+			break
+		}
+		idx += 1 + next
 	}
-	user = line[:idx]
-	pass = line[idx+1:]
-	at := strings.LastIndex(user, "@")
-	if at < 0 {
-		user, pass = "", ""
-		return
+	return "", "", "", false
+}
+
+func isEmailCandidate(s string) bool {
+	at := strings.LastIndex(s, "@")
+	if at <= 0 || at == len(s)-1 {
+		return false
 	}
-	domain = user[at+1:]
-	ok = true
-	return
+	if strings.ContainsAny(s, "/ \t") {
+		return false
+	}
+	return strings.Contains(s[at+1:], ".")
 }
 
 // ParseFile reads a credential file (one "user:pass" per line) and returns
